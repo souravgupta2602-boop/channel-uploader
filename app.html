@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Channel Uploader</title>
+<style>
+  :root { --fg:#1d1d1f; --muted:#6e6e73; --line:#d2d2d7; --bg:#fff; --card:#f5f5f7; --accent:#fe2c55; }
+  body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; max-width: 760px; margin: 32px auto; padding: 0 16px; color: var(--fg); background: var(--bg); line-height: 1.5; }
+  h1 { font-size: 1.6rem; margin: 0 0 4px; } .muted { color: var(--muted); } a { color: #0066cc; }
+  .card { background: var(--card); border-radius: 14px; padding: 18px; margin: 16px 0; }
+  button { font: inherit; border: 0; border-radius: 10px; padding: 10px 16px; cursor: pointer; background: var(--accent); color: #fff; }
+  button:disabled { opacity: .45; cursor: default; } button.ghost { background: #fff; color: var(--fg); border: 1px solid var(--line); }
+  label { display: block; margin: 10px 0 4px; font-weight: 600; } select, textarea { width: 100%; box-sizing: border-box; font: inherit; padding: 9px; border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+  .acct { display: flex; align-items: center; gap: 10px; } .acct img { width: 40px; height: 40px; border-radius: 50%; }
+  .row { display: flex; gap: 18px; flex-wrap: wrap; } .row label { font-weight: 400; display: flex; gap: 6px; align-items: center; margin: 4px 0; }
+  .note { font-size: .9rem; color: var(--muted); } #status { white-space: pre-wrap; font-family: ui-monospace, Consolas, monospace; font-size: .9rem; }
+</style>
+</head>
+<body>
+<h1>Channel Uploader</h1>
+<p class="muted">Post your own finished videos to your own TikTok account. <a href="./#privacy">Privacy</a> · <a href="./#terms">Terms</a></p>
+
+<div class="card" id="offline" hidden>
+  <b>The Channel Uploader helper isn't running on this computer.</b>
+  <p class="note">Start it with <code>python tiktok_app.py</code>, then reload this page. Your TikTok tokens and videos never leave your computer.</p>
+</div>
+
+<div class="card" id="connect">
+  <b>1. Connect your TikTok account</b>
+  <p class="note">You'll be sent to TikTok to log in and approve. We only see your public profile name and picture (user.info.basic) and post videos you choose (video.upload, video.publish).</p>
+  <button id="login">Log in with TikTok</button>
+  <div id="accounts" style="margin-top:12px"></div>
+</div>
+
+<div class="card" id="compose" hidden>
+  <b>2. Create a post</b>
+  <div class="acct" style="margin-top:10px"><img id="avatar" alt=""><div>Posting to <b id="nickname"></b></div></div>
+  <label for="video">Video</label>
+  <select id="video"></select>
+  <p class="note" id="maxdur"></p>
+  <label for="caption">Caption</label>
+  <textarea id="caption" rows="3" maxlength="2200" placeholder="Write a caption, #hashtags"></textarea>
+  <label for="privacy">Who can view this video</label>
+  <select id="privacy"><option value="" selected disabled>Choose who can see this post</option></select>
+  <label>Allow users to</label>
+  <div class="row">
+    <label><input type="checkbox" id="comment"> Comment</label>
+    <label><input type="checkbox" id="duet"> Duet</label>
+    <label><input type="checkbox" id="stitch"> Stitch</label>
+  </div>
+  <label>Content disclosure</label>
+  <div class="row"><label><input type="checkbox" id="disclose"> This video promotes a brand, product or service</label></div>
+  <div class="row" id="discloseOpts" hidden>
+    <label><input type="checkbox" id="yourBrand"> Your brand</label>
+    <label><input type="checkbox" id="branded"> Branded content</label>
+  </div>
+  <p class="note" id="consent">By posting, you agree to TikTok's <a href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" target="_blank">Music Usage Confirmation</a>.</p>
+  <button id="post" disabled>Post to TikTok</button>
+  <p class="note">After posting, it can take a few minutes for TikTok to process the video before it appears on your profile.</p>
+  <div id="status"></div>
+</div>
+
+<script>
+const LOCAL = "http://127.0.0.1:8765";
+const $ = id => document.getElementById(id);
+let cfg = null, current = null;
+
+async function api(path, body) {
+  const r = await fetch(LOCAL + path, body ? {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)} : {});
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.status);
+  return j;
+}
+
+async function init() {
+  try { cfg = await api("/api/config"); } catch (e) { $("offline").hidden = false; $("login").disabled = true; return; }
+  const {accounts} = await api("/api/accounts");
+  $("accounts").innerHTML = accounts.map(a => `<button class="ghost acct" data-id="${a.open_id}"><img src="${a.avatar_url || ""}" alt="">${a.display_name || a.open_id}</button>`).join(" ");
+  document.querySelectorAll("[data-id]").forEach(b => b.onclick = () => choose(accounts.find(a => a.open_id === b.dataset.id)));
+  const {videos} = await api("/api/videos");
+  $("video").innerHTML = videos.map(v => `<option>${v}</option>`).join("");
+}
+
+$("login").onclick = () => {
+  const state = crypto.randomUUID();
+  localStorage.setItem("tt_state", state);
+  const u = new URL("https://www.tiktok.com/v2/auth/authorize/");
+  u.search = new URLSearchParams({client_key: cfg.client_key, scope: "user.info.basic,video.upload,video.publish",
+    response_type: "code", redirect_uri: cfg.redirect, state}).toString();
+  location.href = u.toString();
+};
+
+async function choose(a) {
+  current = a;
+  $("compose").hidden = false;
+  $("avatar").src = a.avatar_url || ""; $("nickname").textContent = a.display_name || "";
+  const ci = await api("/api/creator_info?open_id=" + encodeURIComponent(a.open_id));
+  $("nickname").textContent = ci.creator_nickname || a.display_name;
+  $("privacy").innerHTML = '<option value="" selected disabled>Choose who can see this post</option>' +
+    (ci.privacy_level_options || []).map(p => `<option value="${p}">${{PUBLIC_TO_EVERYONE: "Everyone", MUTUAL_FOLLOW_FRIENDS: "Friends", FOLLOWER_OF_CREATOR: "Followers", SELF_ONLY: "Only me"}[p] || p}</option>`).join("");
+  [["comment", ci.comment_disabled], ["duet", ci.duet_disabled], ["stitch", ci.stitch_disabled]].forEach(([id, off]) => { $(id).checked = false; $(id).disabled = !!off; });
+  $("maxdur").textContent = ci.max_video_post_duration_sec ? `Videos up to ${ci.max_video_post_duration_sec} seconds can be posted to this account.` : "";
+  check();
+}
+
+$("disclose").onchange = () => { $("discloseOpts").hidden = !$("disclose").checked; check(); };
+["yourBrand", "branded"].forEach(id => $(id).onchange = () => {
+  $("consent").innerHTML = $("branded").checked
+    ? 'By posting, you agree to TikTok\'s <a href="https://www.tiktok.com/legal/page/global/bc-policy/en" target="_blank">Branded Content Policy</a> and <a href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" target="_blank">Music Usage Confirmation</a>.'
+    : 'By posting, you agree to TikTok\'s <a href="https://www.tiktok.com/legal/page/global/music-usage-confirmation/en" target="_blank">Music Usage Confirmation</a>.';
+  if ($("branded").checked && $("privacy").value === "SELF_ONLY") $("privacy").value = "";
+  check();
+});
+["privacy", "video", "caption"].forEach(id => $(id).oninput = check);
+function check() {
+  const discloseOk = !$("disclose").checked || $("yourBrand").checked || $("branded").checked;
+  $("post").disabled = !(current && $("privacy").value && $("video").value && discloseOk);
+}
+
+$("post").onclick = async () => {
+  $("post").disabled = true; $("status").textContent = "Uploading…";
+  try {
+    const {publish_id} = await api("/api/post", {open_id: current.open_id, video: $("video").value, caption: $("caption").value,
+      privacy_level: $("privacy").value, disable_comment: !$("comment").checked, disable_duet: !$("duet").checked,
+      disable_stitch: !$("stitch").checked, brand: {your_brand: $("yourBrand").checked, branded: $("branded").checked}});
+    for (let i = 0; i < 60; i++) {
+      const s = await api("/api/status", {open_id: current.open_id, publish_id});
+      $("status").textContent = "Status: " + s.status + (s.fail_reason ? " (" + s.fail_reason + ")" : "");
+      if (["PUBLISH_COMPLETE", "FAILED", "SEND_TO_USER_INBOX"].includes(s.status)) break;
+      await new Promise(r => setTimeout(r, 5000));
+    }
+  } catch (e) { $("status").textContent = "Error: " + e.message; }
+  check();
+};
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Channel Uploader - Connecting</title>
+<style>body { font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; max-width: 640px; margin: 48px auto; padding: 0 16px; color: #1d1d1f; background: #fff; } img { width: 56px; height: 56px; border-radius: 50%; vertical-align: middle; margin-right: 10px; } a { color: #0066cc; }</style>
+</head>
+<body>
+<h1>Connecting your TikTok account…</h1>
+<p id="msg">One moment.</p>
+<script>
+(async () => {
+  const q = new URLSearchParams(location.search), msg = document.getElementById("msg");
+  if (q.get("error")) { msg.textContent = "TikTok login was cancelled: " + (q.get("error_description") || q.get("error")); return; }
+  if (!q.get("code") || q.get("state") !== localStorage.getItem("tt_state")) { msg.textContent = "This login link is not valid. Please start again from the uploader."; return; }
+  try {
+    const r = await fetch("http://127.0.0.1:8765/api/exchange", {method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({code: q.get("code")})});
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error);
+    document.querySelector("h1").textContent = "Connected";
+    msg.innerHTML = `<img src="${j.avatar_url || ""}" alt="">${j.display_name} is connected. <a href="app.html">Go to the uploader</a>`;
+    setTimeout(() => location.href = "app.html", 2500);
+  } catch (e) { msg.textContent = "Could not finish connecting: " + e.message; }
+})();
+</script>
+</body>
+</html>
